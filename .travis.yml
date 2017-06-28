@@ -2,7 +2,6 @@ language: clojure
 lein: 2.7.1
 jdk:
   - oraclejdk8
-sudo: required
 env:
   global:
   - DEPLOY_FROM: resources/public
