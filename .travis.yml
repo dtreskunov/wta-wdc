@@ -1,0 +1,16 @@
+language: clojure
+lein: 2.7.1
+jdk:
+  - oraclejdk8
+env:
+  global:
+  - DEPLOY_FROM: resources/public
+  - ENCRYPTION_LABEL: "f42d64a9fdc6"
+  - COMMIT_AUTHOR_EMAIL: "denis.treskunov@gmail.com"
+branches:
+  except:
+  - gh-pages
+script:
+  - lein do clean, test, cljsbuild once "min"
+  - bash deploy.sh
+
