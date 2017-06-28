@@ -1,17 +1,17 @@
-language: clojure
 jdk:
   - oraclejdk8
 sudo: required
 env:
   global:
   - DEPLOY_FROM: resources/public
-  - ENCRYPTION_LABEL: "84b28f5675a9"
+  - ENCRYPTION_LABEL: "f42d64a9fdc6"
   - COMMIT_AUTHOR_EMAIL: "denis.treskunov@gmail.com"
 branches:
   except:
   - gh-pages
 
 install: yes | sudo lein upgrade "2.7.1"
-script: lein do clean, test, cljsbuild once "min"
-after_success:
+script:
+  - lein do clean, test, cljsbuild once "min"
   - bash deploy.sh
+
