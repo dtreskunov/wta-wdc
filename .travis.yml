@@ -1,3 +1,5 @@
+language: clojure
+lein: 2.7.1
 jdk:
   - oraclejdk8
 sudo: required
@@ -9,8 +11,6 @@ env:
 branches:
   except:
   - gh-pages
-
-install: yes | sudo lein upgrade "2.7.1"
 script:
   - lein do clean, test, cljsbuild once "min"
   - bash deploy.sh
