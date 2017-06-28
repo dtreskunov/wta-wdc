@@ -211,14 +211,14 @@
    {:id "1" :displayName "Under 3 miles"}
    {:id "2" :displayName "3 to 8 miles"}
    {:id "3" :displayName "8 to 12 miles"}
-   {:id "4" :displayName "Over 12 miles"}])
+   {:id "4" :displayName "Over 12 miles, I want to go far!"}])
 
 (def elevation-gains
   [{:id "0" :displayName "No limit"}
    {:id "1" :displayName "Negligible: less than 500 ft"}
    {:id "2" :displayName "Minimum: 500-1500 ft"}
    {:id "3" :displayName "Moderate: 1500-3000 ft"}
-   {:id "4" :displayName "Strenuous: Greater than 3000 ft"}])
+   {:id "4" :displayName "Strenuous: Greater than 3000 ft, I want to climb a mountain!"}])
 
 (defn bind [state & {:keys [js-> ->js] :or {js-> identity ->js identity} :as attrs}]
   (letfn [(get-value [event]
@@ -302,7 +302,8 @@
          [:div.form-group
           [:label.col-sm-3.control-label "Keyword search"]
           [:div.col-sm-9
-           [:input.form-control (bind a-keyword-search :type "text" :placeholder "Full text search of the trail description")]]]
+           [:input.form-control (bind a-keyword-search :type "text" :placeholder "Full text search of the trail description")]
+           [:div.small "Using this option may result in terrible performance"]]]
          [:div.form-group
           [:label.col-sm-3.control-label "Region"]
           [:div.col-sm-9
