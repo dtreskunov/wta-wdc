@@ -1,5 +1,6 @@
 (ns wta-wdc.core
-  (:require [cljs-http.client :as http]
+  (:require [goog.functions]
+            [cljs-http.client :as http]
             [cljs.core.async :as async]
             [cljs-wdc.core :as wdc]
             [hickory.core :as hc]
@@ -36,57 +37,33 @@
   [url (assoc opts :with-credentials? false)])
 
 (defonce wdc-state (r/atom nil))
+(def a-hike-name (r/cursor wdc-state [:connection-data :hike-name]))
+(def a-keyword-search (r/cursor wdc-state [:connection-data :keyword-search]))
+(def a-region (r/cursor wdc-state [:connection-data :region]))
+(def a-features (r/cursor wdc-state [:connection-data :features]))
+(def a-rating (r/cursor wdc-state [:connection-data :rating]))
+(def a-mileage-range (r/cursor wdc-state [:connection-data :mileage-range]))
+(def a-elevation-gain (r/cursor wdc-state [:connection-data :elevation-gain]))
+(def a-high-point (r/cursor wdc-state [:connection-data :high-point]))
+
 (defonce app-state
   (r/atom
-   {:request-count 0
-    :show-ui? true
+   {:show-ui? true
     :called-by-tableau? false}))
 
 (def baseurl "http://www.wta.org")
 (def cors-proxy "dtreskunov-cors-anywhere.herokuapp.com")
+(def hike-search-endpoint "/go-outside/hikes/hike_search")
 
 (defn <request [endpoint & [req]]
-  (swap! app-state update-in [:request-count] inc)
   (->> [endpoint req]
-         (wrap-baseurl baseurl)
-         (wrap-cors cors-proxy)
-         (wrap-auth)
-         (apply http/get)))
-
-(defn handle-response [{:keys [status body]} cb]
-  (swap! app-state update-in [:request-count] dec)
-  (case status
-    200 (cb body)
-    (do (let [err (str "HTTP " status ": " body)]
-          (if (:show-ui? @app-state)
-            (swap! app-state assoc :last-error err)
-            (throw err)))
-        nil)))
+       (wrap-baseurl baseurl)
+       (wrap-cors cors-proxy)
+       (wrap-auth)
+       (apply http/get)))
 
 (defn request [endpoint req cb]
-  (async/go
-    (handle-response
-     (async/<! (<request endpoint req))
-     cb)))
-
-(defn <paginate [endpoint req xform]
-  (let [out (async/chan)]
-    (async/go-loop [endpoint endpoint
-                    req req]
-      (when-let [body (handle-response (async/<! (<request endpoint req))
-                                       #(-> % hc/parse hc/as-hickory))]
-        (let [next (-> (hs/select (hs/child (hs/id :hike_results) (hs/class :pagination) (hs/class :next)) body)
-                       first
-                       :attrs
-                       :href
-                       url/url
-                       :query)
-              val (xform body)]
-          (async/>! out val)
-          (if next
-            (recur endpoint (assoc req :query-params next))
-            (async/close! out)))))
-    out))
+  (async/go (cb (async/<! (<request endpoint req)))))
 
 (defn get-content [{:keys [content]}]
   (->> content
@@ -95,6 +72,9 @@
                (get-content %)))
        (filter #(not (clojure.string/blank? %)))
        (clojure.string/join " ")))
+
+(defn number [s]
+  (first (re-find #"\d+(\.\d+)?" s)))
 
 (defn get-attr-vals [name {:keys [attrs content] :as hickory}]
   (letfn [(-get-attr-vals [{:keys [attrs content]}]
@@ -113,9 +93,11 @@
 (defn by-class [cls hickory]
   (first (all-by-class cls hickory)))
 
+(defn search-page->hike-summaries [search-page]
+  (all-by-class :search-result-item search-page))
+
 (defn hike-summary->row [item]
-  (let [number (fn [s] (first (re-find #"\d+(\.\d+)?" s)))
-        [region sub-region] (->> item (by-class :region) get-content (#(clojure.string/split % #" -- ")))
+  (let [[region sub-region] (->> item (by-class :region) get-content (#(clojure.string/split % #" -- ")))
         hike-length (->> item (by-class :hike-length) get-content)]
     {:url (->> item (by-class :listitem-title) :attrs :href)
      :title (->> item (by-class :listitem-title) get-content)
@@ -131,6 +113,50 @@
      :alert (->> item (by-class :alert) get-content)
      :excerpt (->> item (by-class :show-excerpt) get-content)
      :thumbnailUrl (->> item (by-class :listing-image) (get-attr-vals :src) first)}))
+
+(defn omit-nil-vals [m]
+  (into {} (filter (fn [[k v]] (some? v)) m)))
+
+(defn get-initial-query-params []
+  (omit-nil-vals
+   {:title @a-hike-name
+    :region (:id @a-region)
+    :subregion "all"
+    :features:list (->> @a-features vals (map :id))
+    :rating (:id @a-rating)
+    :mileage:int (:id @a-mileage-range)
+    :elevationgain:int (:id @a-elevation-gain)
+    :highpoint @a-high-point
+    :searchabletext @a-keyword-search
+    :sort "name"
+    :filter "Search"}))
+
+(defn get-next-query-params [search-page]
+  (->> search-page
+       (hs/select (hs/child (hs/id :hike_results) (hs/class :pagination) (hs/class :next)))
+       first :attrs :href url/url :query))
+
+(defn get-total-results-count [search-page]
+  (->> search-page
+       (hs/select (hs/class :search-count))
+       first get-content number int))
+
+(defn <request-hikes []
+  (let [out (async/chan)]
+    (async/go-loop [query-params (get-initial-query-params)]
+      (let [{:keys [status body]} (async/<! (<request hike-search-endpoint {:query-params query-params}))]
+        (if (= 200 status)
+          (let [search-page (hc/as-hickory (hc/parse body))
+                next-query-params (get-next-query-params search-page)
+                rows (->> search-page
+                          search-page->hike-summaries
+                          (map hike-summary->row))]
+            (async/>! out rows)
+            (if next-query-params
+              (recur next-query-params)
+              (async/close! out)))
+          (throw (str "HTTP status " status)))))
+    out))
 
 (deftype WTAWDC []
   wdc/IWebDataConnector
@@ -156,23 +182,7 @@
   (get-standard-connections [this] [])
   (<get-rows [this {:keys [id] :as table-info} increment-value filter-values]
     (case id
-      "hikes"
-      (let [query-params {:title (-> @wdc-state :connection-data :hike-name)
-                          :region (-> @wdc-state :connection-data :region :id)
-                          :subregion "all"
-                          :features:list (->> @wdc-state :connection-data :features vals (map :id))
-                          :dogs nil
-                          :kids nil
-                          :rating (-> @wdc-state :connection-data :rating :id)
-                          :mileage:int (-> @wdc-state :connection-data :mileage-range :id)
-                          :elevationgain:int (-> @wdc-state :connection-data :elevation-gain :id)
-                          :highpoint (-> @wdc-state :connection-data :high-point)
-                          :searchabletext (-> @wdc-state :connection-data :keyword-search)
-                          :sort "name"
-                          :filter "Search"}]
-        (<paginate "/go-outside/hikes/hike_search"
-                   {:query-params query-params}
-                   (fn [body] (->> body (all-by-class :search-result-item) (map hike-summary->row)))))))
+      "hikes" (<request-hikes)))
   (shutdown [this] @wdc-state)
   (init [this phase state]
     (swap! wdc-state deep-merge state)
@@ -279,19 +289,18 @@
 
 
 (defn ui-component []
-  (let [request-count (:request-count @app-state)
-        requests-in-flight (> request-count 0)
-        a-search-page (r/atom nil)
-        a-hike-name (r/cursor wdc-state [:connection-data :hike-name])
-        a-keyword-search (r/cursor wdc-state [:connection-data :keyword-search])
-        a-region (r/cursor wdc-state [:connection-data :region])
-        a-features (r/cursor wdc-state [:connection-data :features])
-        a-rating (r/cursor wdc-state [:connection-data :rating])
-        a-mileage-range (r/cursor wdc-state [:connection-data :mileage-range])
-        a-elevation-gain (r/cursor wdc-state [:connection-data :elevation-gain])
-        a-high-point (r/cursor wdc-state [:connection-data :high-point])]
-    (request "/go-outside/hikes/hike_search" {} #(reset! a-search-page (hc/as-hickory (hc/parse %))))
+  (let [a-search-page (r/atom nil)
+        a-available-regions (r/track #(get-regions @a-search-page))
+        a-available-features (r/track #(get-features @a-search-page))
+        a-total-results-count (r/track #(get-total-results-count @a-search-page))
+        a-initial-query-params (r/track get-initial-query-params)
+        -request-search-page (fn [query-params]
+                               (request hike-search-endpoint
+                                        {:query-params query-params}
+                                        (fn [{:keys [body]}] (reset! a-search-page (hc/as-hickory (hc/parse body))))))
+        request-search-page (goog.functions/debounce -request-search-page 1000)]
     (fn []
+      (request-search-page @a-initial-query-params)
       [:div.panel.panel-primary
        [:div.panel-body
         [:form.form-horizontal
@@ -307,11 +316,11 @@
          [:div.form-group
           [:label.col-sm-3.control-label "Region"]
           [:div.col-sm-9
-           [select-component a-region (r/track #(get-regions @a-search-page)) {:multiple? false :size 12}]]]
+           [select-component a-region a-available-regions {:multiple? false :size 12}]]]
          [:div.form-group
           [:label.col-sm-3.control-label "Features"]
           [:div.col-sm-9
-           [select-component a-features (r/track #(get-features @a-search-page)) {:multiple? true :size 12}]
+           [select-component a-features a-available-features {:multiple? true :size 12}]
            [:div.small "Hold down Cmd/Ctrl key to select multiples"]]]
          [:div.form-group
           [:label.col-sm-3.control-label "Rating"]
@@ -330,13 +339,11 @@
           [:div.col-sm-9
            [:input.form-control (bind a-high-point :type "text" :placeholder "Max elevation, ft")]]]
          [:div.form-group
-          [:label.col-sm-3.control-label
-           (when requests-in-flight [:span.glyphicon.glyphicon-hourglass {:title (str request-count " requests")}])]
-          [:div.col-sm-9
+          [:div.col-sm-offset-3.col-sm-9
            [:div.small "You must abide by WTA's "
             [:a {:href "http://www.wta.org/our-work/about/terms-of-service" :target "_blank"} "Terms of Service"]
             " in order to use this data."]
-           [:button.btn.btn-primary {:type "button" :on-click #(wdc/go! wdc)} "OK"]]]]]])))
+           [:button.btn.btn-primary {:type "button" :on-click #(wdc/go! wdc)} (str "Fetch " @a-total-results-count " hikes")]]]]]])))
 
 (defn learn-more-component []
   [:div
@@ -366,5 +373,3 @@
   ;; your application
   (swap! app-state update-in [:__figwheel_counter] inc)
 )
-
-
