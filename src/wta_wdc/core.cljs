@@ -142,10 +142,14 @@
        first get-content number int))
 
 (defn <request-hikes []
-  (let [out (async/chan)]
-    (async/go-loop [query-params (get-initial-query-params)]
+  (let [out (async/chan)
+        retry-limit 3
+        retry-sleep 10000]
+    (async/go-loop [query-params (get-initial-query-params)
+                    retry-count 0]
       (let [{:keys [status body]} (async/<! (<request hike-search-endpoint {:query-params query-params}))]
-        (if (= 200 status)
+        (case status
+          200
           (let [search-page (hc/as-hickory (hc/parse body))
                 next-query-params (get-next-query-params search-page)
                 rows (->> search-page
@@ -153,8 +157,15 @@
                           (map hike-summary->row))]
             (async/>! out rows)
             (if next-query-params
-              (recur next-query-params)
+              (recur next-query-params 0)
               (async/close! out)))
+          (429, 503)
+          (if (< retry-count retry-limit)
+            (do
+              (println (str "Retrying, status: " status ", retry-count: " retry-count ", retry-limit: " retry-limit ", retry-sleep: " retry-sleep))
+              (async/<! (async/timeout retry-sleep))
+              (recur query-params (inc retry-count)))
+            (throw (str "Retries exhausted for HTTP status " status ", giving up")))
           (throw (str "HTTP status " status)))))
     out))
 
