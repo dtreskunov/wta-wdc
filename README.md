@@ -11,6 +11,12 @@ Copy-and-paste the link below into Tableau Desktop's Web Data Connector dialog:
 
 **[WTA Connector Link](https://dtreskunov.github.io/wta-wdc/)**
 
+## Sample Workbook
+
+![img](https://public.tableau.com/static/images/Hi/HikesinWashingtonwithEstablishedCampsites/Dashboard/1_rss.png)
+
+[link](https://public.tableau.com/views/HikesinWashingtonwithEstablishedCampsites/Dashboard?:embed=y&:display_count=yes)
+
 ## Setup For Developers
 
 Refer to Tableau Web Data Connector [documentation hub](http://tableau.github.io/webdataconnector/) for WDC specifics.
